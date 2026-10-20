@@ -6,6 +6,16 @@ Linux에서 ATSC(8VSB) 지상파 수신 카드로 쓰기 위한 cx88 드라이�
 Stock Linux recognizes this card only as `UNKNOWN/GENERIC [card=0]` with no DVB frontend.
 This package adds board support (card=92) to the cx88 driver and ships it as a DKMS module.
 
+![SKYTV HD Blue PCI](docs/images/board-overview.jpg)
+
+## 하드웨어 / Hardware
+
+| CX23880-39 브리지 (U1) | LG LGDT3305 복조기 (U7, I2C 0x0e) | Cirrus CS5340 오디오 ADC (U3) |
+|---|---|---|
+| ![CX23880](docs/images/cx23880.jpg) | ![LGDT3305](docs/images/lgdt3305.jpg) | ![CS5340](docs/images/cs5340.jpg) |
+
+튜너는 금속 캔(TU1, PLL I2C 0x61) 안에 있습니다. GPIO·튜너·복조기 상세는 [docs/HARDWARE.md](docs/HARDWARE.md) 참고.
+
 ## 동작 확인 환경 / Tested
 
 | 항목 | 값 |
@@ -13,6 +23,10 @@ This package adds board support (card=92) to the cx88 driver and ships it as a D
 | 커널 | Ubuntu 7.0.0 (`7.0.0-26260609-generic`), cx88 소스는 Linux v7.0 기준 |
 | 수신 | 서울 ATSC 지상파: MBC 473 MHz, KBS1 479 MHz, SBS 485 MHz, KBS2 491 MHz |
 | 결과 | 8VSB lock, 1080i MPEG-2 + AC3 TS 정상 녹화 |
+
+| 테스트 시스템 (ASRock B250M-HDV) | 카드 장착 상태 |
+|---|---|
+| ![test system](docs/images/test-system.jpg) | ![card installed](docs/images/card-installed.jpg) |
 
 지원 범위: **ATSC 8VSB 디지털 수신만** 검증했습니다. QAM(케이블)·아날로그 TV 튜너는 구현/검증하지 않았습니다.
 컴포지트/S-Video 입력은 보드 정의만 있고 검증하지 않았습니다.
