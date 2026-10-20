@@ -5,6 +5,7 @@ Board 19b8:0464: CX23880 + LGDT3305 + can tuner at 0x61.
 - LGDT3305 driven with the LGDT3304 (high IF) register flow, vendor 8VSB
   table and power-on IF NCO re-applied after each tune, ADC enabled
 - custom 5-byte PLL programming for the can tuner
+- skip the I2C IR receiver probe (spurious ACK at 0x18 → "rc rc0: error -5" flood)
 
 Against Linux v7.0 drivers/media/pci/cx88. See docs/HARDWARE.md.
 
@@ -375,3 +376,19 @@ Against Linux v7.0 drivers/media/pci/cx88. See docs/HARDWARE.md.
  	case CX88_BOARD_PCHDTV_HD5500:
  		dev->ts_gen_cntrl = 0x08;
  
+--- a/drivers/media/pci/cx88/cx88-input.c
++++ b/drivers/media/pci/cx88/cx88-input.c
+@@ -602,6 +602,13 @@
+ 	strscpy(info.type, "ir_video", I2C_NAME_SIZE);
+ 
+ 	switch (core->boardnr) {
++	case CX88_BOARD_SKYTV_HD_BLUE:
++		/*
++		 * No I2C IR receiver. The quick-read probe of 0x18 gets a
++		 * spurious ACK while the demod powers up, and ir_kbd_i2c then
++		 * floods the log with "rc rc0: error -5".
++		 */
++		return;
+ 	case CX88_BOARD_LEADTEK_PVR2000:
+ 		addr_list = pvr2000_addr_list;
+ 		core->init_data.name = "cx88 Leadtek PVR 2000 remote";

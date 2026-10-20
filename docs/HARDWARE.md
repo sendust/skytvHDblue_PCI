@@ -15,6 +15,10 @@ vendor Windows driver (`skytvhdbluets.sys`, `skytvhdbluevideo.sys`, 2013-04-12).
 | – | auth chip | 0x3d | challenge/response (regs 0x30, 0x76, 0x80, 0x89), vendor copy protection; not needed |
 | – | EEPROM | 0x50 | only `07 00 00 00 b8 19 64 04`, rest 0xff |
 
+There is no I2C IR receiver. cx88's IR probe (quick read of 0x18/0x33/0x6b/0x71) can get a
+spurious ACK at 0x18 while the demod powers up; `ir_kbd_i2c` then polls it and logs
+`rc rc0: error -5` ~10×/s. The driver skips the IR probe for this board.
+
 ## GPIO
 
 The vendor driver puts the CX2388x GPIO block in **24-bit mode** by setting

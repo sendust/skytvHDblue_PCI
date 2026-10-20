@@ -12,9 +12,11 @@ if [ "$(id -u)" -ne 0 ]; then
 	exit 1
 fi
 
-if dkms status -m $NAME -v "$VER" | grep -q .; then
-	dkms remove -m $NAME -v "$VER" --all
-fi
+# drop any installed version (older ones would otherwise stay registered)
+for v in $(dkms status -m $NAME | sed -n "s|^$NAME/\([^,]*\),.*|\1|p" | sort -u); do
+	dkms remove -m $NAME -v "$v" --all
+	rm -rf /usr/src/$NAME-"$v"
+done
 rm -rf "$SRC"
 mkdir -p "$SRC"
 cp -r "$(dirname "$0")"/dkms.conf "$(dirname "$0")"/src "$SRC"/

@@ -43,6 +43,7 @@ Expected: `board: SKYTV HD Blue PCI [card=92,autodetected]`,
 | frontend exists, never locks, all demod regs frozen | ADC off: `GEN_CTRL_4 (0x000a)` bits 0/1 cleared — `skytv_set_frontend` must set them |
 | demod regs live but no lock | IF/NCO wrong: must restore power-on 0x0007 and NCO 0x0106-9 after each tune; check tuner PLL status 0x61 bit6 |
 | `Signal= 0.00%` | meaningless before lock (SNR-derived) — don't use it as a signal test |
+| dmesg flooded with `rc rc0: error -5` | `ir_kbd_i2c` bound to a phantom 0x18 (`/sys/class/rc/rc0` → `i2c-N/N-0018`); fixed in 1.1 by skipping the IR probe for this board. Stop it live: `sudo rmmod ir_kbd_i2c` |
 
 ## Debugging without rebuilding
 

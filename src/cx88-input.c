@@ -602,6 +602,13 @@ void cx88_i2c_init_ir(struct cx88_core *core)
 	strscpy(info.type, "ir_video", I2C_NAME_SIZE);
 
 	switch (core->boardnr) {
+	case CX88_BOARD_SKYTV_HD_BLUE:
+		/*
+		 * No I2C IR receiver. The quick-read probe of 0x18 gets a
+		 * spurious ACK while the demod powers up, and ir_kbd_i2c then
+		 * floods the log with "rc rc0: error -5".
+		 */
+		return;
 	case CX88_BOARD_LEADTEK_PVR2000:
 		addr_list = pvr2000_addr_list;
 		core->init_data.name = "cx88 Leadtek PVR 2000 remote";

@@ -39,7 +39,7 @@ git clone <this repo> cx88-skytv && cd cx88-skytv
 sudo ./install.sh
 ```
 
-`install.sh`는 소스를 `/usr/src/cx88-skytv-1.0`에 복사하고 `dkms add/build/install` 후
+`install.sh`는 소스를 `/usr/src/cx88-skytv-<버전>`에 복사하고 (이전 버전은 제거) `dkms add/build/install` 후
 실행 중인 cx88 모듈을 새 모듈로 교체합니다. 모듈은 `/lib/modules/<ver>/updates/dkms/`에
 설치되어 커널 기본 cx88보다 우선 로드됩니다. 커널 업데이트 시 DKMS가 자동으로 다시 빌드합니다
 (`BUILD_EXCLUSIVE_KERNEL="^7\.0\."` — 7.0.x 커널에만 빌드).
