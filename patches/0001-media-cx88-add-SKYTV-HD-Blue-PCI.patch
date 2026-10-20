@@ -1,0 +1,377 @@
+Subject: [PATCH] media: cx88: add Skydigital SKYTV HD Blue PCI (ATSC)
+
+Board 19b8:0464: CX23880 + LGDT3305 + can tuner at 0x61.
+- GPIO in 24-bit mode (GP3 bit25), demod power-up GPIO15/16/9
+- LGDT3305 driven with the LGDT3304 (high IF) register flow, vendor 8VSB
+  table and power-on IF NCO re-applied after each tune, ADC enabled
+- custom 5-byte PLL programming for the can tuner
+
+Against Linux v7.0 drivers/media/pci/cx88. See docs/HARDWARE.md.
+
+---
+--- a/drivers/media/pci/cx88/cx88.h
++++ b/drivers/media/pci/cx88/cx88.h
+@@ -229,6 +229,7 @@
+ #define CX88_BOARD_WINFAST_TV2000_XP_GLOBAL_6F36 89
+ #define CX88_BOARD_WINFAST_TV2000_XP_GLOBAL_6F43 90
+ #define CX88_BOARD_NOTONLYTV_LV3H          91
++#define CX88_BOARD_SKYTV_HD_BLUE           92
+ 
+ enum cx88_itype {
+ 	CX88_VMUX_COMPOSITE1 = 1,
+--- a/drivers/media/pci/cx88/cx88-cards.c
++++ b/drivers/media/pci/cx88/cx88-cards.c
+@@ -2339,6 +2339,35 @@
+ 		} },
+ 		.mpeg           = CX88_MPEG_DVB,
+ 	},
++	/*
++	 * Skydigital SKYTV HD Blue PCI: LGDT3305 + LG can tuner (PLL 0x61).
++	 * GPIO runs in 24-bit mode (GP3 bit25): GP0 = data, GP1 = output
++	 * enable. GPIO15/16 power the demod, GPIO9 is demod reset (active
++	 * low), GPIO0-2 select the audio source. GP2 mirrors GP0 in this mode.
++	 */
++	[CX88_BOARD_SKYTV_HD_BLUE] = {
++		.name           = "SKYTV HD Blue PCI",
++		.tuner_type     = UNSET,
++		.radio_type     = UNSET,
++		.tuner_addr     = ADDR_UNSET,
++		.radio_addr     = ADDR_UNSET,
++		.input          = { {
++			.type   = CX88_VMUX_COMPOSITE1,
++			.vmux   = 1,
++			.gpio0  = 0x00018203,
++			.gpio1  = 0x00018207,
++			.gpio2  = 0x00018203,
++			.gpio3  = 0x02000000,
++		}, {
++			.type   = CX88_VMUX_SVIDEO,
++			.vmux   = 2,
++			.gpio0  = 0x00018203,
++			.gpio1  = 0x00018207,
++			.gpio2  = 0x00018203,
++			.gpio3  = 0x02000000,
++		} },
++		.mpeg           = CX88_MPEG_DVB,
++	},
+ };
+ 
+ /* ------------------------------------------------------------------ */
+@@ -2844,6 +2873,10 @@
+ 		.subvendor = 0x1822,
+ 		.subdevice = 0x0023,
+ 		.card      = CX88_BOARD_TWINHAN_VP1027_DVBS,
++	}, {
++		.subvendor = 0x19b8,
++		.subdevice = 0x0464,
++		.card      = CX88_BOARD_SKYTV_HD_BLUE,
+ 	},
+ };
+ 
+@@ -3332,6 +3365,23 @@
+ 		udelay(1000);
+ 		break;
+ 
++	case CX88_BOARD_SKYTV_HD_BLUE:
++		/*
++		 * same power-up order as the vendor driver: 15, Vdd(16), reset(9).
++		 * Full writes only: GP0 reads back pin levels, not the latch.
++		 */
++		cx_write(MO_GP3_IO, 0x02000000);
++		cx_write(MO_GP0_IO, 0x00000003);
++		cx_write(MO_GP1_IO, 0x00018207);
++		usleep_range(10000, 20000);
++		cx_write(MO_GP0_IO, 0x00008003);
++		usleep_range(10000, 20000);
++		cx_write(MO_GP0_IO, 0x00018003);
++		usleep_range(10000, 20000);
++		cx_write(MO_GP0_IO, 0x00018203);
++		usleep_range(10000, 20000);
++		break;
++
+ 	case CX88_BOARD_PROLINK_PV_GLOBAL_XTREME:
+ 	case CX88_BOARD_PROLINK_PV_8000GT:
+ 		cx_write(MO_GP2_IO, 0xcf7);
+--- a/drivers/media/pci/cx88/cx88-dvb.c
++++ b/drivers/media/pci/cx88/cx88-dvb.c
+@@ -47,6 +47,7 @@
+ #include "mb86a16.h"
+ #include "ts2020.h"
+ #include "ds3000.h"
++#include "lgdt3305.h"
+ 
+ MODULE_DESCRIPTION("driver for cx2388x based DVB cards");
+ MODULE_AUTHOR("Chris Pascoe <c.pascoe@itee.uq.edu.au>");
+@@ -418,6 +419,235 @@
+ 	.set_ts_params = lgdt330x_set_ts_param,
+ };
+ 
++/*
++ * SKYTV HD Blue PCI. The can tuner is not one tuner-simple knows: the
++ * vendor driver writes 5 bytes to 0x61 (DB1 DB2 CB BB AB), 62.5 kHz steps,
++ * band bytes 0x01/0x02/0x08 split at 165/449 MHz (picture carrier).
++ * IF, control/aux bytes, inversion and TS mode are tunables until verified.
++ */
++static unsigned int skytv_if_khz = 44000;
++module_param(skytv_if_khz, uint, 0644);
++MODULE_PARM_DESC(skytv_if_khz, "SKYTV HD Blue: tuner IF / demod NCO in kHz [44000]");
++
++static unsigned int skytv_cb = 0x93;
++module_param(skytv_cb, uint, 0644);
++MODULE_PARM_DESC(skytv_cb, "SKYTV HD Blue: tuner control byte [0x93]");
++
++static unsigned int skytv_ab = 0xc2;
++module_param(skytv_ab, uint, 0644);
++MODULE_PARM_DESC(skytv_ab, "SKYTV HD Blue: tuner 5th (aux) byte [0xc2]");
++
++static unsigned int skytv_inversion;
++module_param(skytv_inversion, uint, 0644);
++MODULE_PARM_DESC(skytv_inversion, "SKYTV HD Blue: demod spectral inversion [0]");
++
++/*
++ * The vendor driver programs the chip with the same register set Linux
++ * uses for LGDT3304 (high IF, GEN_CONTROL left at its default); the
++ * LGDT3305 path forces low-IF mode, which does not fit a 44 MHz can tuner.
++ */
++static unsigned int skytv_as_3304 = 1;
++module_param(skytv_as_3304, uint, 0444);
++MODULE_PARM_DESC(skytv_as_3304, "SKYTV HD Blue: drive demod with the LGDT3304 register set [1]");
++
++static unsigned int skytv_serial;
++module_param(skytv_serial, uint, 0444);
++MODULE_PARM_DESC(skytv_serial, "SKYTV HD Blue: serial TS from demod [0]");
++
++static unsigned int skytv_ts_gen_cntrl;
++module_param(skytv_ts_gen_cntrl, uint, 0444);
++MODULE_PARM_DESC(skytv_ts_gen_cntrl, "SKYTV HD Blue: cx88 TS_GEN_CNTRL [0x00]");
++
++static struct lgdt3305_config skytv_hd_blue_config = {
++	.i2c_addr           = 0x0e,
++	.deny_i2c_rptr      = 1, /* tuner sits on the cx88 bus directly */
++	.tpclk_edge         = LGDT3305_TPCLK_FALLING_EDGE,
++	.tpclk_mode         = LGDT3305_TPCLK_GATED,
++	.tpvalid_polarity   = LGDT3305_TP_VALID_HIGH,
++	.demod_chip         = LGDT3305,
++};
++
++struct skytv_tuner_priv {
++	struct i2c_adapter *i2c;
++	u32 frequency;
++};
++
++static int skytv_tuner_set_params(struct dvb_frontend *fe)
++{
++	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
++	struct skytv_tuner_priv *priv = fe->tuner_priv;
++	u32 pc = c->frequency - 1750000; /* center -> picture carrier */
++	u32 div = (c->frequency + skytv_if_khz * 1000) / 62500;
++	u8 buf[5];
++	struct i2c_msg msg = {
++		.addr = 0x61, .flags = 0, .buf = buf, .len = sizeof(buf)
++	};
++	int ret;
++
++	buf[0] = (div >> 8) & 0x7f;
++	buf[1] = div & 0xff;
++	buf[2] = skytv_cb;
++	buf[3] = pc <= 165000000 ? 0x01 : pc <= 449000000 ? 0x02 : 0x08;
++	buf[4] = skytv_ab;
++
++	/* the demod reads these after tuning, so they can change at runtime */
++	skytv_hd_blue_config.qam_if_khz = skytv_if_khz;
++	skytv_hd_blue_config.vsb_if_khz = skytv_if_khz;
++	skytv_hd_blue_config.spectral_inversion = !!skytv_inversion;
++
++	dprintk(1, "skytv tuner: %u Hz -> %*ph inv=%u\n",
++		c->frequency, 5, buf, skytv_inversion);
++
++	if (fe->ops.i2c_gate_ctrl)
++		fe->ops.i2c_gate_ctrl(fe, 1);
++	ret = i2c_transfer(priv->i2c, &msg, 1);
++	if (fe->ops.i2c_gate_ctrl)
++		fe->ops.i2c_gate_ctrl(fe, 0);
++	if (ret != 1)
++		return ret < 0 ? ret : -EIO;
++
++	priv->frequency = c->frequency;
++	msleep(100); /* PLL lock */
++	return 0;
++}
++
++static int skytv_tuner_get_frequency(struct dvb_frontend *fe, u32 *frequency)
++{
++	struct skytv_tuner_priv *priv = fe->tuner_priv;
++
++	*frequency = priv->frequency;
++	return 0;
++}
++
++static void skytv_tuner_release(struct dvb_frontend *fe)
++{
++	kfree(fe->tuner_priv);
++	fe->tuner_priv = NULL;
++}
++
++static const struct dvb_tuner_ops skytv_tuner_ops = {
++	.info = {
++		.name              = "SKYTV HD Blue can tuner",
++		.frequency_min_hz  =  54 * MHz,
++		.frequency_max_hz  = 864 * MHz,
++		.frequency_step_hz = 62500,
++	},
++	.set_params    = skytv_tuner_set_params,
++	.get_frequency = skytv_tuner_get_frequency,
++	.release       = skytv_tuner_release,
++};
++
++/* the demod takes a while to answer on I2C after reset is released */
++static int skytv_wait_demod(struct i2c_adapter *i2c)
++{
++	u8 reg[2] = { 0x00, 0x01 }, val;
++	struct i2c_msg msg[2] = {
++		{ .addr = 0x0e, .flags = 0,        .buf = reg,  .len = 2 },
++		{ .addr = 0x0e, .flags = I2C_M_RD, .buf = &val, .len = 1 },
++	};
++	int i;
++
++	/* it ACKs before it is ready: wait for GEN_CTRL_2 to read non-zero */
++	msleep(100);
++	for (i = 0; i < 30; i++) {
++		if (i2c_transfer(i2c, msg, 2) == 2 && val) {
++			dprintk(1, "skytv: demod up after %d ms (0x%02x)\n",
++				100 + i * 100, val);
++			msleep(100);
++			return 0;
++		}
++		msleep(100);
++	}
++	return -ENODEV;
++}
++
++static int skytv_demod_write(struct i2c_adapter *i2c, u16 reg, u8 val)
++{
++	u8 buf[3] = { reg >> 8, reg & 0xff, val };
++	struct i2c_msg msg = { .addr = 0x0e, .flags = 0, .buf = buf, .len = 3 };
++
++	return i2c_transfer(i2c, &msg, 1) == 1 ? 0 : -EIO;
++}
++
++static int skytv_demod_read(struct i2c_adapter *i2c, u16 reg, u8 *val)
++{
++	u8 buf[2] = { reg >> 8, reg & 0xff };
++	struct i2c_msg msg[2] = {
++		{ .addr = 0x0e, .flags = 0,        .buf = buf, .len = 2 },
++		{ .addr = 0x0e, .flags = I2C_M_RD, .buf = val, .len = 1 },
++	};
++
++	return i2c_transfer(i2c, msg, 2) == 2 ? 0 : -EIO;
++}
++
++/*
++ * The vendor driver never writes the IF NCO (0x0106-0x0109) or GEN_CONTROL
++ * (0x0007): it relies on the power-on defaults. Capture them right after
++ * the hardware reset, before lgdt3305 touches anything.
++ */
++static const u16 skytv_default_regs[] = { 0x0007, 0x0106, 0x0107, 0x0108, 0x0109 };
++static u8 skytv_defaults[ARRAY_SIZE(skytv_default_regs)];
++
++/* 8VSB register set from the vendor driver (skytvhdbluets.sys .data) */
++static const struct { u16 reg; u8 val; } skytv_vsb_regs[] = {
++	{ 0x0000, 0x03 }, { 0x000d, 0x02 }, { 0x000e, 0x02 }, { 0x0012, 0x32 },
++	{ 0x0013, 0xc4 }, { 0x0112, 0x17 }, { 0x0113, 0x15 }, { 0x0114, 0x18 },
++	{ 0x0115, 0xff }, { 0x0116, 0x3c }, { 0x0214, 0x07 }, { 0x0424, 0x8d },
++	{ 0x0427, 0x12 }, { 0x0428, 0x4f }, { 0x0308, 0x80 }, { 0x0309, 0x00 },
++	{ 0x030d, 0x14 }, { 0x030e, 0x1c }, { 0x0314, 0xe1 },
++};
++
++static void skytv_save_defaults(struct i2c_adapter *i2c)
++{
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(skytv_default_regs); i++)
++		skytv_demod_read(i2c, skytv_default_regs[i], &skytv_defaults[i]);
++	pr_info("SKYTV HD Blue: demod defaults 0007=%02x NCO=%*ph\n",
++		skytv_defaults[0], 4, &skytv_defaults[1]);
++}
++
++static int (*skytv_lgdt_set_frontend)(struct dvb_frontend *fe);
++
++static int skytv_set_frontend(struct dvb_frontend *fe)
++{
++	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
++	struct skytv_tuner_priv *priv = fe->tuner_priv;
++	struct i2c_adapter *i2c = priv->i2c;
++	u8 v;
++	int i, ret;
++
++	ret = skytv_lgdt_set_frontend(fe);
++	if (ret || c->modulation != VSB_8)
++		return ret;
++
++	for (i = 0; i < ARRAY_SIZE(skytv_vsb_regs); i++)
++		skytv_demod_write(i2c, skytv_vsb_regs[i].reg, skytv_vsb_regs[i].val);
++	for (i = 0; i < ARRAY_SIZE(skytv_default_regs); i++)
++		skytv_demod_write(i2c, skytv_default_regs[i], skytv_defaults[i]);
++	skytv_demod_write(i2c, 0x0126, skytv_inversion ? 0xf9 : 0x79);
++
++	/* ADC + VSB/QAM block on (GEN_CTRL_4); lgdt3305_sleep() clears them */
++	if (!skytv_demod_read(i2c, 0x000a, &v))
++		skytv_demod_write(i2c, 0x000a, v | 0x03);
++	/* AGC pins out of tristate, then soft reset (GEN_CTRL_3) */
++	skytv_demod_write(i2c, 0x0002, 0x00);
++	msleep(20);
++	return skytv_demod_write(i2c, 0x0002, 0x01);
++}
++
++static int skytv_tuner_attach(struct dvb_frontend *fe, struct i2c_adapter *i2c)
++{
++	struct skytv_tuner_priv *priv = kzalloc(sizeof(*priv), GFP_KERNEL);
++
++	if (!priv)
++		return -ENOMEM;
++	priv->i2c = i2c;
++	fe->tuner_priv = priv;
++	memcpy(&fe->ops.tuner_ops, &skytv_tuner_ops, sizeof(skytv_tuner_ops));
++	return 0;
++}
++
+ static int nxt200x_set_ts_param(struct dvb_frontend *fe, int is_punctured)
+ {
+ 	struct cx8802_dev *dev = fe->dvb->priv;
+@@ -1274,6 +1504,36 @@
+ 				goto frontend_detach;
+ 		}
+ 		break;
++	case CX88_BOARD_SKYTV_HD_BLUE:
++		dev->ts_gen_cntrl = skytv_ts_gen_cntrl;
++
++		/* demod is powered in cx88_card_setup(); pulse reset (GPIO9) */
++		cx_write(MO_GP3_IO, 0x02000000);
++		cx_write(MO_GP1_IO, 0x00018207);
++		cx_write(MO_GP0_IO, 0x00018003);
++		msleep(20);
++		cx_write(MO_GP0_IO, 0x00018203);
++		if (skytv_wait_demod(&core->i2c_adap))
++			pr_warn("SKYTV HD Blue: LGDT3305 not answering after reset\n");
++		skytv_save_defaults(&core->i2c_adap);
++
++		skytv_hd_blue_config.qam_if_khz = skytv_if_khz;
++		skytv_hd_blue_config.vsb_if_khz = skytv_if_khz;
++		skytv_hd_blue_config.spectral_inversion = !!skytv_inversion;
++		skytv_hd_blue_config.mpeg_mode = skytv_serial ?
++			LGDT3305_MPEG_SERIAL : LGDT3305_MPEG_PARALLEL;
++		skytv_hd_blue_config.demod_chip = skytv_as_3304 ?
++			LGDT3304 : LGDT3305;
++		fe0->dvb.frontend = dvb_attach(lgdt3305_attach,
++					       &skytv_hd_blue_config,
++					       &core->i2c_adap);
++		if (fe0->dvb.frontend) {
++			if (skytv_tuner_attach(fe0->dvb.frontend, &core->i2c_adap))
++				goto frontend_detach;
++			skytv_lgdt_set_frontend = fe0->dvb.frontend->ops.set_frontend;
++			fe0->dvb.frontend->ops.set_frontend = skytv_set_frontend;
++		}
++		break;
+ 	case CX88_BOARD_PCHDTV_HD5500:
+ 		dev->ts_gen_cntrl = 0x08;
+ 
